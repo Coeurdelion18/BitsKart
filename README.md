@@ -11,16 +11,28 @@ BitsKart/
 ├── backend/
 │   ├── config/
 │   │   └── db.js
-│   ├── controllers/
-│   │   ├── authController.js
-│   │   ├── customerController.js
-│   │   └── retailerController.js
+|   ├── core/
+|   │   ├── BaseController.js  # Common controller utilities
+|   │   ├── BaseService.js     # Common service utilities
+|   │   └── ApiError.js        # Custom error handling class
+│   ├── controllers/           #Classes that handle requests/responses
+│   │   ├── AuthController.js
+│   │   ├── CustomerController.js
+│   │   └── RetailerController.js
 │   ├── middleware/
-│   │   └── authMiddleware.js
-│   ├── models/
-│   │   ├── userModel.js
-│   │   ├── productModel.js
-│   │   └── orderModel.js
+│   │   └── AuthMiddleware.js
+│   ├── models/                 # Define Database Schemas (Objects in DB)
+│   │   ├── User.js             # User Class via Mongoose
+│   │   ├── Product.js
+│   │   └── Order.js
+|   ├── repositories/           #Classes that handle DB operations for a model
+|   │   ├── UserRepository.js
+|   │   ├── ProductRepository.js
+|   │   └── OrderRepository.js
+|   ├── services/               #Classes that contain business logic
+|   │   ├── AuthService.js
+|   │   ├── CustomerService.js
+|   │   └── RetailerService.js
 │   ├── routes/
 │   │   ├── authRoutes.js
 │   │   ├── customerRoutes.js
