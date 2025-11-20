@@ -1,42 +1,88 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+:root {
+  color: #f8fafc;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.page-shell {
+  min-height: 100vh;
+  padding: clamp(1.5rem, 2vw, 3rem);
+  position: relative;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
+.glass-panel {
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 28px;
+  box-shadow: 0 20px 60px rgba(2, 6, 23, 0.75);
+  backdrop-filter: blur(28px);
+  color: #f8fafc;
+}
+
+.glass-panel * {
+  color: inherit;
+}
+
+.gradient-text {
+  background: linear-gradient(120deg, #c084fc, #60a5fa, #34d399);
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.neon-divider {
+  width: 140px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #34d399, #60a5fa, #c084fc);
+  margin: 1rem auto;
+}
+
+.glow-circle {
+  position: absolute;
+  width: 380px;
+  height: 380px;
+  border-radius: 50%;
+  filter: blur(140px);
+  opacity: 0.6;
+  z-index: 0;
+}
+
+.glow-circle.pink {
+  background: #f472b6;
+  top: -120px;
+  right: -80px;
+}
+
+.glow-circle.blue {
+  background: #38bdf8;
+  bottom: -160px;
+  left: -60px;
+}
+
+.floating {
+  animation: float 12s ease-in-out infinite;
+}
+
+@keyframes float {
+  0% {
+    transform: translate3d(0, 0, 0);
   }
-  to {
-    transform: rotate(360deg);
+  50% {
+    transform: translate3d(0, -18px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
   }
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+::-webkit-scrollbar {
+  width: 10px;
 }
 
-.card {
-  padding: 2em;
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.6);
 }
 
-.read-the-docs {
-  color: #888;
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #818cf8, #34d399);
+  border-radius: 999px;
 }
