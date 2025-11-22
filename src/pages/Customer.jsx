@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  // ... your existing imports ...
+  Card,
+  CardContent,
+  CardActions,  // Add this line
+  // ... rest of your imports ...
+} from "@mui/material";
 import { useNavigate } from "react-router-dom";
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import {
   AppBar,
   Toolbar,
   Typography,
   Button,
-  Grid,
-  Card,
+  Grid, 
   CardActionArea,
-  CardContent,
   Container,
   Box,
   Chip,
@@ -77,6 +83,17 @@ const stats = [
   { title: "Reward Points", value: "3,420" },
 ];
 
+const CUSTOMER_PRICE_MULTIPLIER = 1.05;
+
+const DEFAULT_CUSTOMER_PRICES = {
+  Shirts: 1299,
+  Trousers: 1499,
+  Jackets: 2799,
+  Shoes: 2199,
+  Accessories: 799,
+  "Ethnic Wear": 3299,
+};
+
 const DEFAULT_LOCATION = { lat: 12.9716, lng: 77.5946 };
 
 const formatDistanceLabel = (distanceKm) => {
@@ -86,13 +103,33 @@ const formatDistanceLabel = (distanceKm) => {
   return "Distance unavailable";
 };
 
-const CATEGORY_PRICES = {
-  Shirts: 1299,
-  Trousers: 1499,
-  Jackets: 2799,
-  Shoes: 2199,
-  Accessories: 799,
-  "Ethnic Wear": 3299,
+const normalizeCategoryKey = (categoryName = "") =>
+  categoryName.toLowerCase().replace(/\s+/g, "");
+
+const parsePositiveNumber = (value) => {
+  const num = typeof value === "number" ? value : parseFloat(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
+};
+
+const resolveDisplayPrice = (price, categoryName) =>
+  parsePositiveNumber(price) ?? parsePositiveNumber(DEFAULT_CUSTOMER_PRICES[categoryName]) ?? 0;
+
+const getRetailerPriceForCategory = (retailer = {}, categoryName) => {
+  if (!categoryName) return 0;
+  const normalizedKey = `${normalizeCategoryKey(categoryName)}Price`;
+  const priceSources = [
+    retailer?.prices?.[categoryName],
+    retailer?.stock?.prices?.[categoryName],
+    retailer?.[normalizedKey],
+    retailer?.[`${categoryName.toLowerCase()}Price`],
+  ];
+
+  for (const source of priceSources) {
+    const parsed = parsePositiveNumber(source);
+    if (parsed !== null) return Math.ceil(parsed * CUSTOMER_PRICE_MULTIPLIER);
+  }
+
+  return resolveDisplayPrice(undefined, categoryName);
 };
 
 const mapContainerStyle = {
@@ -121,6 +158,7 @@ export default function Customer() {
   const [distanceFilterKm, setDistanceFilterKm] = useState(30);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [viewingCategory, setViewingCategory] = useState(false);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -215,12 +253,14 @@ export default function Customer() {
         const availableQty = retailer.stock?.[category.name] || 0;
         if (availableQty > 0) {
           if (!map[category.name]) map[category.name] = [];
+          const price = getRetailerPriceForCategory(retailer, category.name);
+          
           map[category.name].push({
             retailerId: retailer.id,
             retailerName: retailer.name || retailer.email || "Retailer",
             retailerEmail: retailer.email,
             availableQty,
-            price: CATEGORY_PRICES[category.name] || 0,
+            price: price,
             distanceKm: retailer.distanceKm,
             location: retailer.location,
           });
@@ -262,6 +302,22 @@ export default function Customer() {
     setDesiredQty(1);
     setDialogOpen(true);
   };
+  //Function to handle view all category
+  const handleViewAllCategory = (categoryName) => {
+    console.log('View all clicked for category:', categoryName);
+    console.log('Current retailers:', filteredRetailers);
+    setSelectedCategory(categoryName);
+    setViewingCategory(true);
+    // Scroll to the top of the page
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  //handle back to main
+  const handleBackToMain = () => {
+    setViewingCategory(false);
+    setSelectedCategory('');
+  };
+
 
   const handleCloseDialog = () => {
     setDialogOpen(false);
@@ -341,40 +397,168 @@ export default function Customer() {
     }
   };
 
+  if (viewingCategory && selectedCategory) {
+    try {
+      console.log('Rendering category view for:', selectedCategory);
+      const selectedCategoryConfig = categories.find((cat) => cat.name === selectedCategory);
+      const categoryItems = filteredRetailers
+        .filter(retailer => {
+          const hasStock = retailer.stock?.[selectedCategory] > 0;
+          console.log(`Retailer ${retailer.id} has stock:`, hasStock, 'stock:', retailer.stock);
+          return hasStock;
+        })
+        .map(retailer => {
+          console.log('Mapping retailer:', retailer.id, 'with stock:', retailer.stock);
+          return {
+            ...retailer,
+            category: selectedCategory,
+            price: getRetailerPriceForCategory(retailer, selectedCategory),
+            gradient: selectedCategoryConfig?.gradient,
+          };
+        });
+
+      console.log('Category items:', categoryItems);
+
+      return (
+        <Container maxWidth="lg" sx={{ py: 4 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+            <IconButton onClick={handleBackToMain} sx={{ mr: 2 }}>
+              <ArrowBackIcon />
+            </IconButton>
+            <Typography variant="h4" component="h1">
+              {selectedCategory} ({categoryItems.length} items)
+            </Typography>
+          </Box>
+          
+          {categoryItems.length === 0 ? (
+            <Typography>No items found for this category.</Typography>
+          ) : (
+            <Grid container spacing={3}>
+              {categoryItems.map((item, index) => {
+                const displayPrice = resolveDisplayPrice(item.price, selectedCategory);
+                return (
+                  <Grid item xs={12} sm={6} md={4} lg={3} key={`${item.id}-${index}`}>
+                    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                      <CardContent sx={{ flexGrow: 1 }} 
+                      style={{  backgroundImage: item.gradient, 
+                                backgroundSize: 'cover', 
+                                backgroundPosition: 'center', 
+                                backgroundRepeat: 'no-repeat', 
+                                }}>
+                        <Typography variant="h6" gutterBottom>
+                          {item.name || 'Unnamed Retailer'}
+                        </Typography>
+                        <Typography color="textSecondary" gutterBottom>
+                          {item.distanceKm ? `${item.distanceKm.toFixed(1)} km away` : 'Distance not available'}
+                        </Typography>
+                        <Typography variant="h6" color="primary">
+                          ₹{displayPrice.toLocaleString()}
+                        </Typography>
+                        <Typography variant="body2" color="textSecondary">
+                          Available: {item.stock?.[selectedCategory] || 0} units
+                        </Typography>
+                      </CardContent>
+                      <CardActions>
+                        <Button 
+                          fullWidth 
+                          variant="contained" 
+                          onClick={() => {
+                            const distance = item.distanceKm || 0;
+                            const { estimatedDelivery } = calculateEstimatedDeliveryDate(distance);
+                            addItem(
+                              {
+                                retailerId: item.id,
+                                retailerName: item.name,
+                                category: selectedCategory,
+                                price: displayPrice,
+                                availableQty: item.stock?.[selectedCategory] || 0,
+                                distanceKm: distance,
+                                estimatedDelivery: estimatedDelivery.toISOString(),
+                                addedAt: new Date().toISOString()
+                              },
+                              1
+                            );
+                            alert(`${selectedCategory} added to cart from ${item.name}\nEstimated delivery: ${estimatedDelivery.toDateString()}\nPrice: ₹${displayPrice}`);
+                          }}
+                        >
+                          Add to Cart
+                        </Button>
+                      </CardActions>
+                    </Card>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+        </Container>
+      );
+    } catch (error) {
+      console.error('Error rendering category view:', error);
+      return (
+        <Container maxWidth="lg" sx={{ py: 4 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+            <IconButton onClick={handleBackToMain} sx={{ mr: 2 }}>
+              <ArrowBackIcon />
+            </IconButton>
+            <Typography variant="h5" color="error">
+              Error loading {selectedCategory}
+            </Typography>
+          </Box>
+          <Typography>Please try again later.</Typography>
+          <Button 
+            variant="contained" 
+            onClick={handleBackToMain}
+            sx={{ mt: 2 }}
+          >
+            Go Back
+          </Button>
+        </Container>
+      );
+    }
+  }
+
   return (
-    <Box className="page-shell" sx={{ overflow: "hidden" }}>
+    <Box className="page-shell" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <div className="glow-circle pink floating" />
       <div className="glow-circle blue" />
       <AppBar
         position="sticky"
         elevation={0}
         sx={{
-          backgroundColor: "rgba(15,23,42,0.8)",
-          backdropFilter: "blur(14px)",
+          backgroundColor: "rgba(15,23,42,0.95)",
+          backdropFilter: "blur(10px)",
           borderBottom: "1px solid rgba(255,255,255,0.1)",
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          zIndex: (theme) => theme.zIndex.drawer + 1,
+          top: 0,
+          position: 'sticky',
+          width: '100%',
+          flexShrink: 0
         }}
       >
-        <Toolbar sx={{ display: "flex", justifyContent: "space-between" }}>
-          <Typography variant="h6" className="gradient-text" sx={{ fontWeight: 700 }}>
+        <Toolbar>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700 }}>
             BITSmart Customer
           </Typography>
-          <TextField
-            fullWidth
-            variant="outlined"
-            placeholder="Search boutiques..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            size="small"
-            sx={{ mb: 2, backgroundColor: "rgba(255, 255, 255, 1)" }}
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <Box sx={{ mr: 1, color: 'text.secondary' }}>🔍</Box>
-                ),
-              },
-            }}
-          />
-          <Stack direction="row" spacing={1}>
+          <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', maxWidth: '600px', ml: 2 }}>
+            <TextField
+              fullWidth
+              variant="outlined"
+              size="small"
+              placeholder="Search boutiques..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              sx={{ mb: 2, backgroundColor: "rgba(255, 255, 255, 1)" }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <Box sx={{ mr: 1, color: 'text.secondary' }}>🔍</Box>
+                  ),
+                },
+              }}
+            />
+
+            <Stack direction="row" spacing={1}>
             <Button
               color="inherit"
               startIcon={
@@ -397,6 +581,30 @@ export default function Customer() {
               Logout
             </Button>
           </Stack>
+          </Box>
+          {/* <Stack direction="row" spacing={1}>
+            <Button
+              color="inherit"
+              startIcon={
+                <Badge badgeContent={totalItems} color="secondary" overlap="circular" showZero>
+                  <ShoppingCartIcon />
+                </Badge>
+              }
+              onClick={() => navigate("/cart")}
+            >
+              Cart
+            </Button>
+            <Button
+              color="inherit"
+              startIcon={<HistoryIcon />}
+              onClick={() => navigate("/history")}
+            >
+              History
+            </Button>
+            <Button color="inherit" onClick={handleLogout}>
+              Logout
+            </Button>
+          </Stack> */}
         </Toolbar>
       </AppBar>
 
@@ -486,7 +694,7 @@ export default function Customer() {
                   />
                 </Box>
               </Grid>
-              <Grid container spacing={3} sx={{ mt: 1 }}>
+              {/* <Grid container spacing={3} sx={{ mt: 1 }}>
               {categories.map((cat) => {
                 const available = (categoryRetailerMap[cat.name] || []).length > 0;
                 const closestRetailer = available ? categoryRetailerMap[cat.name][0] : null;
@@ -519,7 +727,7 @@ export default function Customer() {
                   </Grid>
                 );
               })}
-            </Grid>
+            </Grid> */}
               <Grid item xs={12} md={6}>
                 <Card className="glass-panel" sx={{ p: 3 }}>
                   <Typography variant="h5" sx={{ color: "rgba(5, 57, 109, 0.83)", mb: 2 }}>
@@ -545,6 +753,8 @@ export default function Customer() {
               Explore curated drops
             </Typography>
             <div className="neon-divider" />
+
+            
             
             {/* Products Grid */}
             <Box sx={{ mt: 6 }}>
@@ -562,14 +772,17 @@ export default function Customer() {
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                             <Typography variant="h6" sx={{ fontWeight: 600,color:'rgba(252, 251, 248, 0.8)' }}>
                               {category.name}
-                              <Typography component="span" sx={{ ml: 1, color: 'text.secondary' }}>
+                              <Typography component="span" sx={{ ml: 1, color: 'rgba(252, 251, 248, 0.8)' }}>
                                 ({productCount} items)
                               </Typography>
                             </Typography>
                             <Button 
                               variant="outlined" 
                               size="small"
-                              onClick={() => setSelectedCategory(category.name)}
+                              onClick={(e) => {
+                                e.stopPropagation(); 
+                                handleViewAllCategory(category.name)
+                              }} 
                               sx={{ textTransform: 'none' }}
                             >
                               View all
@@ -577,61 +790,88 @@ export default function Customer() {
                           </Box>
                           
                           <Grid container spacing={2}>
-                            {categoryRetailers.slice(0, 4).map((retailer, idx) => (
-                              <Grid item xs={6} sm={4} md={3} key={`${retailer.retailerId}-${idx}`}>
-                                <Card 
-                                  sx={{ 
-                                    height: '100%', 
-                                    display: 'flex', 
-                                    flexDirection: 'column',
-                                    transition: 'transform 0.2s',
-                                    '&:hover': {
-                                      transform: 'translateY(-4px)',
-                                      boxShadow: 3
-                                    }
-                                  }}
-                                >
-                                  <Box 
+                            {categoryRetailers.slice(0, 4).map((retailer, idx) => {
+                              const displayPrice = resolveDisplayPrice(retailer.price, category.name);
+                              return (
+                                <Grid item xs={6} sm={4} md={3} key={`${retailer.retailerId}-${idx}`}>
+                                  <Card 
                                     sx={{ 
-                                      height: 160, 
-                                      background: category.gradient,
-                                      //backgroundImage: 'url(oop-project/src/assets/react.svg)',
-                                      //backgroundSize: 'cover',
-                                      //backgroundPosition: 'center',
-                                      position: 'relative',
-                                      overflow: 'hidden',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      color: 'white',
-                                      fontSize: '2rem',
-                                      fontWeight: 600,
-                                      textShadow: '1px 1px 3px rgba(0,0,0,0.3)'
+                                      height: '100%', 
+                                      display: 'flex', 
+                                      flexDirection: 'column',
+                                      transition: 'transform 0.2s',
+                                      '&:hover': {
+                                        transform: 'translateY(-4px)',
+                                        boxShadow: 3
+                                      }
                                     }}
                                   >
-                                    {category.name.charAt(0)}
-                                  </Box>
-                                  <CardContent sx={{ flexGrow: 1, p: 2 }}>
-                                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
-                                      {category.name}
-                                    </Typography>
-                                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                      {retailer.retailerName}
-                                    </Typography>
-                                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                      <Typography variant="h6" color="primary">
-                                        ₹{CATEGORY_PRICES[category.name]?.toLocaleString()}
-                                      </Typography>
-                                      <Chip 
-                                        label={`${retailer.availableQty} in stock`} 
-                                        size="small" 
-                                        color={retailer.availableQty > 5 ? 'success' : 'warning'}
-                                      />
+                                    <Box 
+                                      sx={{ 
+                                        height: 160, 
+                                        background: category.gradient,
+                                        position: 'relative',
+                                        overflow: 'hidden',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: 'white',
+                                        fontSize: '2rem',
+                                        fontWeight: 600,
+                                        textShadow: '1px 1px 3px rgba(0,0,0,0.3)'
+                                      }}
+                                    >
+                                      {category.name.charAt(0)}
                                     </Box>
-                                  </CardContent>
-                                </Card>
-                              </Grid>
-                            ))}
+                                    <CardContent sx={{ flexGrow: 1, p: 2 }}>
+                                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+                                        {category.name}
+                                      </Typography>
+                                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                        {retailer.retailerName}
+                                      </Typography>
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <Typography variant="h6" color="primary">
+                                          ₹{displayPrice.toLocaleString()}
+                                        </Typography>
+                                        <Chip 
+                                          label={`${retailer.availableQty} in stock`} 
+                                          size="small" 
+                                          color={retailer.availableQty > 5 ? 'success' : 'warning'}
+                                        />
+                                      </Box>
+                                    </CardContent>
+                                    <CardActions>
+                                      <Button 
+                                        fullWidth 
+                                        variant="contained" 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const distance = retailer.distanceKm || 0;
+                                          const { estimatedDelivery } = calculateEstimatedDeliveryDate(distance);
+                                          addItem(
+                                            {
+                                              retailerId: retailer.retailerId,
+                                              retailerName: retailer.retailerName,
+                                              category: category.name,
+                                              price: displayPrice,
+                                              availableQty: retailer.availableQty,
+                                              distanceKm: distance,
+                                              estimatedDelivery: estimatedDelivery.toISOString(),
+                                              addedAt: new Date().toISOString()
+                                            },
+                                            1
+                                          );
+                                          alert(`${category.name} added to cart from ${retailer.retailerName}\nEstimated delivery: ${estimatedDelivery.toDateString()}\nPrice: ₹${displayPrice}`);
+                                        }}
+                                      >
+                                        Add to Cart
+                                      </Button>
+                                    </CardActions>
+                                  </Card>
+                                </Grid>
+                              );
+                            })}
                           </Grid>
                         </Box>
                       </Card>
@@ -640,11 +880,12 @@ export default function Customer() {
                 })}
               </Grid>
             </Box>
-
+            
+            {/*Customer Reviews*/}
             <Grid container spacing={4} sx={{ mt: 6 }}>
               <Grid item xs={12} md={2} sx ={{width:'100%'}}>
                 <Card className="glass-panel" sx={{ p: 3, height: 'fit-content' }}>
-                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, fontSize: '1rem' }}>Why customers stay</Typography>
+                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, fontSize: '1rem' }}>What customers say</Typography>
                   <Stack spacing={1.5}>
                     {["1:1 messaging", "Smart picks", "Easy checkout"]
                       .map((item) => (
@@ -665,12 +906,12 @@ export default function Customer() {
               </Grid>
               <Grid item xs={12} md={10} sx={{ width: '100%' }}>
                 <Card className="glass-panel" sx={{ p: 0, overflow: 'hidden', width: '100%', height: '600px' }}>
+                  {/*Stores near you*/}
                   <Box sx={{ p: 4 }}>
                     <Typography variant="h5" sx={{ fontWeight: 600 }}>Stores near you</Typography>
-                    <Typography variant="body2" sx={{ color: "rgba(9, 9, 10, 0.7)", mb: 2 }}>
-                      Tap a pin to preview real-time stock.
-                    </Typography>
                   </Box>
+
+                  {/*Google Maps API implementation */}
                   <LoadScript googleMapsApiKey="AIzaSyCsN0VtNMbHd96oGj7Ch16FVqHQoyT0Uqc">
                     <GoogleMap mapContainerStyle={mapContainerStyle} center={mapCenter} zoom={12}>
                       <Marker position={customerLocation} label="You" />
@@ -690,11 +931,9 @@ export default function Customer() {
         )}
       </Container>
 
-      <Box sx={{ textAlign: "center", py: 4, color: "rgba(248,250,252,0.6)" }}>
-        <Typography variant="body2">© 2025 BITSmart — Crafted for immersive commerce.</Typography>
-      </Box>
+      
 
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} fullWidth maxWidth="sm">
+      {/* <Dialog open={dialogOpen} onClose={handleCloseDialog} fullWidth maxWidth="sm">
         <DialogTitle sx={{ pr: 6 }}>
           Choose a boutique for {dialogCategory}
           <IconButton
@@ -752,12 +991,12 @@ export default function Customer() {
           <Button
             variant="contained"
             onClick={handleAddToCart}
-            disabled={!activeRetailer}
+            //disabled={!activeRetailer}
           >
             Add to cart
           </Button>
         </DialogActions>
-      </Dialog>
+      </Dialog> */}
     </Box>
   );
 }

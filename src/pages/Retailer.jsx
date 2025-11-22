@@ -29,6 +29,8 @@ import {
   DialogContent,
   DialogActions,
   Slider,
+  TableContainer,
+  Paper
 } from "@mui/material";
 
 import { db, auth } from "../firebase";
@@ -45,6 +47,7 @@ import {
   orderBy,
   where,
   updateDoc,
+  runTransaction,
 } from "firebase/firestore";
 
 import { GoogleMap, LoadScript, Marker } from "@react-google-maps/api";
@@ -92,6 +95,36 @@ const MapComponent = ({ location, setLocation }) => {
   );
 };
 
+const buildWholesalerStockView = (stockData = {}, wholesalerData = {}) => {
+  const cleanStock = {};
+  Object.entries(stockData).forEach(([key, value]) => {
+    if (typeof value === "number") {
+      cleanStock[key] = value;
+    }
+  });
+
+  return {
+    ...cleanStock,
+    ...(stockData.productNames && { productNames: stockData.productNames }),
+    prices: {
+      ...(wholesalerData.prices || {}),
+      ...(stockData.prices || {}),
+    },
+  };
+};
+
+const fetchWholesalerStockView = async (wholesalerId) => {
+  const [stockSnap, wholesalerSnap] = await Promise.all([
+    getDoc(doc(db, "stocks", wholesalerId)),
+    getDoc(doc(db, "wholesalers", wholesalerId)),
+  ]);
+
+  const stockData = stockSnap.exists() ? stockSnap.data() : {};
+  const wholesalerData = wholesalerSnap.exists() ? wholesalerSnap.data() : {};
+
+  return buildWholesalerStockView(stockData, wholesalerData);
+};
+
 export default function Retailer() {
   const navigate = useNavigate();
 
@@ -99,7 +132,7 @@ export default function Retailer() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [location, setLocation] = useState({ lat: 12.9716, lng: 77.5946 }); // Default: Bangalore
-  
+  const [productNames, setProductNames] = useState({});
   const [myStock, setMyStock] = useState({});
   const [myOrders, setMyOrders] = useState([]);
   const [retailerId, setRetailerId] = useState(null);
@@ -114,11 +147,27 @@ export default function Retailer() {
   const [customerOrders, setCustomerOrders] = useState([]);
   const [updatingCustomerOrderId, setUpdatingCustomerOrderId] = useState(null);
   const [isPaying, setIsPaying] = useState(false);
+  const [error, setError] = useState(null);
   const [deliveryDialogOpen, setDeliveryDialogOpen] = useState(false);
   const [deliveryTargetOrder, setDeliveryTargetOrder] = useState(null);
   const [deliveryForm, setDeliveryForm] = useState({ expectedDate: "", cost: "", carrier: "", notes: "" });
   const [savingDeliveryInfo, setSavingDeliveryInfo] = useState(false);
   const [distanceFilterKm, setDistanceFilterKm] = useState(30);
+  //Functions
+
+  const fetchWholesalerProductNames = async (wholesalerId) => {
+    try {
+      const stockDoc = await getDoc(doc(db, "stocks", wholesalerId));
+      if (stockDoc.exists()) {
+        return stockDoc.data().productNames || {};
+      }
+      return {};
+    } catch (error) {
+      console.error("Error fetching product names:", error);
+      return {};
+    }
+  };
+
 
   const wholesalersWithDistance = useMemo(
     () =>
@@ -129,13 +178,10 @@ export default function Retailer() {
     [wholesalers, location]
   );
 
+  // Show all wholesalers regardless of distance
   const filteredWholesalers = useMemo(
-    () =>
-      wholesalersWithDistance.filter((ws) => {
-        if (ws.distanceKm == null) return true;
-        return ws.distanceKm <= distanceFilterKm;
-      }),
-    [wholesalersWithDistance, distanceFilterKm]
+    () => [...wholesalersWithDistance],
+    [wholesalersWithDistance]
   );
 
   const selectedWholesaler = wholesalersWithDistance.find((w) => w.id === selectedWholesalerId);
@@ -196,60 +242,152 @@ export default function Retailer() {
   const fetchMyStock = async (uid) => {
     if (!uid) return;
     const stockSnap = await getDoc(doc(db, "stocks", uid));
-    setMyStock(stockSnap.exists() ? stockSnap.data() : {});
+    if (stockSnap.exists()) {
+      const stockData = stockSnap.data();
+      // Remove the updatedAt field if it exists
+      const { updatedAt, ...stockWithoutTimestamp } = stockData;
+      setMyStock(stockWithoutTimestamp);
+    } else {
+      setMyStock({});
+    }
   };
 
   const fetchMyOrders = async (uid) => {
     if (!uid) return;
-    const q = query(collection(db, "orders"), where("userId", "==", uid), orderBy("createdAt", "desc"));
+    const q = query(
+      collection(db, "retailerOrders"),
+      where("retailerId", "==", uid),
+      orderBy("createdAt", "desc")
+    );
     const snapshot = await getDocs(q);
     const orders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     setMyOrders(orders);
   };
 
   const fetchWholesalers = async () => {
-    const snapshot = await getDocs(collection(db, "wholesalers"));
-    const wsList = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    setWholesalers(wsList);
+    try {
+      console.log('Fetching wholesalers...');
+      const wholesalersSnapshot = await getDocs(collection(db, "wholesalers"));
+      console.log(`Found ${wholesalersSnapshot.docs.length} wholesalers in database`);
+      
+      const wholesalersList = [];
+      
+      // Process each wholesaler
+      for (const doc of wholesalersSnapshot.docs) {
+        try {
+          const wholesalerData = doc.data();
+          console.log(`Processing wholesaler: ${doc.id} (${wholesalerData.name || 'no name'})`);
+
+          const productNames = await fetchWholesalerProductNames(doc.id);
+          console.log(`Product names for ${doc.id}:`, productNames);
+          
+          // Get stock data if available
+          let hasStock = false;
+          try {
+            const stockSnap = await getDoc(doc(db, "stocks", doc.id));
+            if (stockSnap.exists()) {
+              const stockData = stockSnap.data();
+              console.log(`Stock data for ${doc.id}:`, stockData);
+              
+              // Check if any stock item has quantity > 0
+              hasStock = Object.values(stockData).some(
+                value => typeof value === 'number' && value > 0
+              );
+            }
+          } catch (stockError) {
+            console.warn(`Error fetching stock for ${doc.id}:`, stockError);
+          }
+          
+          // Include the wholesaler regardless of stock status
+          wholesalersList.push({ 
+            id: doc.id, 
+            ...wholesalerData,
+            productNames : productNames,
+            hasStock
+          });
+          
+        } catch (error) {
+          console.error(`Error processing wholesaler ${doc.id}:`, error);
+          // Continue with next wholesaler
+          continue;
+        }
+      }
+      
+      console.log(`Processed ${wholesalersList.length} wholesalers`);
+      setWholesalers(wholesalersList);
+      
+    } catch (error) {
+      console.error('Error in fetchWholesalers:', error);
+      setWholesalers([]);
+    }
   };
 
   const fetchCustomerOrders = async (uid) => {
     if (!uid) return;
-    const q = query(
-      collection(db, "customerOrders"),
-      where("retailerId", "==", uid),
-      orderBy("createdAt", "desc")
-    );
-    const snapshot = await getDocs(q);
-    const orders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-    setCustomerOrders(orders);
+    try {
+      const q = query(
+        collection(db, "customerOrders"),
+        where("retailerId", "==", uid),
+        orderBy("createdAt", "desc")
+      );
+      const snapshot = await getDocs(q);
+      const orders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      setCustomerOrders(orders);
+    } catch (error) {
+      console.error("Error fetching customer orders:", error);
+      setCustomerOrders([]);
+    }
   };
 
-  // --- Order Placement ---
   const handleSelectWholesaler = async (id) => {
     if (!id) {
       setSelectedWholesalerId("");
       setSelectedWholesalerStock({});
+      setCart(null);
+      setQuantities({});
       return;
     }
-    setSelectedWholesalerId(id);
-    setCart(null); // Clear cart when switching wholesalers
-    setQuantities({});
-    // Fetch the selected wholesaler's stock
-    const stockSnap = await getDoc(doc(db, "stocks", id));
-    setSelectedWholesalerStock(stockSnap.exists() ? stockSnap.data() : {});
+
+    try {
+      setSelectedWholesalerId(id);
+      setCart(null);
+      setQuantities({});
+
+      console.log(`Fetching data for wholesaler: ${id}`);
+      const stockView = await fetchWholesalerStockView(id);
+      setSelectedWholesalerStock(stockView);
+    } catch (error) {
+      console.error("Error fetching wholesaler data:", error);
+      setSelectedWholesalerStock({});
+      alert('Failed to load wholesaler data. Please try again.');
+    }
   };
 
   const handleQuantityChange = (category, value) => {
-    const maxQty = selectedWholesalerStock[category] || 0;
-    const validValue = Math.max(0, Math.min(maxQty, parseInt(value) || 0));
-    setQuantities((prev) => ({ ...prev, [category]: validValue }));
+    const maxAvailable = selectedWholesalerStock?.[category] || 0;
+    if (value === "") {
+      setQuantities((prev) => ({ ...prev, [category]: "" }));
+      return;
+    }
+
+    const numericValue = Math.max(0, parseInt(value, 10) || 0);
+    const clampedValue = Math.min(numericValue, maxAvailable);
+    setQuantities((prev) => ({ ...prev, [category]: clampedValue }));
   };
 
   const handleAddToCart = () => {
     const orderItems = Object.entries(quantities)
       .filter(([_, qty]) => qty > 0)
-      .map(([category, qty]) => ({ category, quantity: parseInt(qty), price: CATEGORY_PRICES[category] }));
+      .map(([category, qty]) => {
+        // Get price from wholesaler's prices, fallback to default if not found
+        const basePrice = selectedWholesalerStock?.prices?.[category] || CATEGORY_PRICES[category] || 0;
+        return { 
+          category, 
+          quantity: parseInt(qty), 
+          price: basePrice,
+          basePrice // Store the original price for reference
+        };
+      });
 
     if (!orderItems.length) return alert("Enter at least one quantity!");
     
@@ -264,79 +402,86 @@ export default function Retailer() {
   };
 
   const handlePlaceOrder = async () => {
-    if (!cart) return alert("No order in cart!");
+    if (!retailerId || !selectedWholesalerId || cart.items.length === 0) return;
     if (!RAZORPAY_KEY_ID) {
       alert("Missing Razorpay key. Set VITE_RAZORPAY_KEY_ID in your .env file.");
       return;
     }
+
     const user = auth.currentUser;
     if (!user) {
-      alert("Your session has expired. Please sign in again.");
+      alert("Please sign in again.");
       navigate("/login");
       return;
     }
 
     setIsPaying(true);
+    setError(null);
 
     let paymentResponse = null;
     let paymentError = null;
-
     try {
       paymentResponse = await openRazorpayCheckout({
         key: RAZORPAY_KEY_ID,
         amount: cart.totalAmount * 100,
         currency: "INR",
-        name: "BITSmart Retail Purchase",
-        description: `Retail order from ${selectedWholesaler?.name || "Wholesaler"}`,
+        name: "BITSmart Retailer Purchase",
+        description: `${cart.items.length} item(s) from ${selectedWholesaler?.name || "Wholesaler"}`,
         prefill: {
-          name: name || user.displayName || "Retailer",
+          name: name || user.displayName || user.email?.split("@")[0] || "Retailer",
           email: email || user.email,
         },
         notes: {
-          wholesalerId: cart.wholesalerId,
-          retailerId: user.uid,
+          retailerId,
+          wholesalerId: selectedWholesalerId,
         },
       });
-    } catch (error) {
-      paymentError = error;
-      console.warn("Razorpay checkout not completed", error);
+    } catch (err) {
+      paymentError = err;
+      console.warn("Razorpay checkout not completed", err);
+      // Continue with order placement in pending state for testing purposes
     }
 
     try {
-      // TODO: In a real app, you would also decrement the wholesaler's stock here
-      // This requires a transaction to be safe.
-      // For now, we just place the order and update our *own* stock.
-
-      await addDoc(collection(db, "orders"), {
-        userId: user.uid, // This is the Retailer's ID
-        retailerName: name,
-        retailerEmail: email,
+      const orderData = {
+        retailerId,
+        retailerName: name || email,
+        wholesalerId: selectedWholesalerId,
+        wholesalerName: selectedWholesaler?.name || 'Unknown Wholesaler',
         items: cart.items,
         totalAmount: cart.totalAmount,
-        status: "Placed", // Wholesaler will see this
-        statusHistory: [
-          {
-            status: "Placed",
-            timestamp: Timestamp.now(),
-            note: paymentResponse ? "Order placed with payment" : "Order placed without payment",
-          },
-        ],
-        createdAt: serverTimestamp(),
-        wholesalerId: cart.wholesalerId, // ID of the wholesaler being bought from
+        status: 'Placed',
+        statusHistory: [{
+          status: 'Placed',
+          timestamp: Timestamp.now(),
+          note: paymentResponse ? 'Order placed with payment' : 'Order placed',
+        }],
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
         paymentId: paymentResponse?.razorpay_payment_id || null,
         razorpaySignature: paymentResponse?.razorpay_signature || null,
-        paymentStatus: paymentResponse ? "paid" : "pending",
+        paymentStatus: paymentResponse ? 'paid' : 'pending',
         paymentErrorMessage: paymentError?.message || null,
-      });
+      };
 
-      await decrementWholesalerStock(cart.items, cart.wholesalerId);
-      await updateMyStock(cart.items, user.uid);
+      const orderRef = await addDoc(collection(db, 'retailerOrders'), orderData);
+      console.log('Order placed successfully:', orderRef.id);
+
+      await updateMyStock(cart.items, retailerId);
+      await decrementWholesalerStock(cart.items, selectedWholesalerId);
+
+      setMyOrders(prevOrders => [{
+        id: orderRef.id,
+        ...orderData,
+      }, ...prevOrders]);
+      await fetchMyOrders(retailerId);
+
+      alert(paymentResponse ? 'Payment successful! Order placed.' : 'Order placed. Payment pending.');
       setCart(null);
-      await Promise.all([fetchMyStock(user.uid), fetchMyOrders(user.uid)]);
-      alert(paymentResponse ? "Payment successful and order placed!" : "Order placed. Payment pending.");
+      setQuantities({});
     } catch (error) {
-      console.error("Failed to place order", error);
-      alert(`Unable to place order: ${error?.message || "Unknown error"}`);
+      console.error('Error placing order:', error);
+      setError('Failed to place order. Contact support.');
     } finally {
       setIsPaying(false);
     }
@@ -348,28 +493,77 @@ export default function Retailer() {
     const stockRef = doc(db, "stocks", uid);
     const stockSnap = await getDoc(stockRef);
     const existingStock = stockSnap.exists() ? stockSnap.data() : {};
-    const updatedStock = { ...existingStock };
-    orderItems.forEach(({ category, quantity }) => {
+    
+    // Create a new object with existing stock data, excluding any timestamp fields
+    const { updatedAt, ...cleanExistingStock } = existingStock;
+    const updatedStock = { ...cleanExistingStock };
+    const existingPrices = existingStock.prices || {};
+    const updatedPrices = { ...existingPrices };
+    
+    // Update stock with new quantities
+    orderItems.forEach(({ category, quantity, price, basePrice }) => {
       updatedStock[category] = (updatedStock[category] || 0) + parseInt(quantity);
+
+      const buyingPrice = Number(
+        (basePrice ?? price ?? existingPrices[category] ?? CATEGORY_PRICES[category] ?? 0)
+      );
+      if (!Number.isNaN(buyingPrice) && buyingPrice > 0) {
+        updatedPrices[category] = buyingPrice;
+      }
     });
-    await setDoc(stockRef, updatedStock);
+    if (Object.keys(updatedPrices).length) {
+      updatedStock.prices = updatedPrices;
+    }
+    
+    // Persist product names from selected wholesaler for display
+    if (selectedWholesalerStock?.productNames) {
+      updatedStock.productNames = {
+        ...(existingStock.productNames || {}),
+        ...selectedWholesalerStock.productNames,
+      };
+    }
+
+    await setDoc(stockRef, updatedStock, { merge: true });
     setMyStock(updatedStock);
+    console.log('Updated stock:', updatedStock);
   };
 
   const decrementWholesalerStock = async (orderItems, wholesalerId) => {
-    if (!wholesalerId) return;
+    if (!wholesalerId || !orderItems?.length) return;
     const stockRef = doc(db, "stocks", wholesalerId);
-    const stockSnap = await getDoc(stockRef);
-    const existingStock = stockSnap.exists() ? stockSnap.data() : {};
-    const updatedStock = { ...existingStock };
-    orderItems.forEach(({ category, quantity }) => {
-      const current = updatedStock[category] || 0;
-      updatedStock[category] = Math.max(0, current - parseInt(quantity));
+
+    await runTransaction(db, async (transaction) => {
+      const stockSnap = await transaction.get(stockRef);
+      const existingStock = stockSnap.exists() ? stockSnap.data() : {};
+      const updatedStock = { ...existingStock };
+
+      orderItems.forEach(({ category, quantity }) => {
+        if (!category) return;
+        const current = parseInt(updatedStock[category], 10) || 0;
+        const decrementBy = parseInt(quantity, 10) || 0;
+        updatedStock[category] = Math.max(0, current - decrementBy);
+      });
+
+      transaction.set(stockRef, updatedStock, { merge: true });
     });
-    await setDoc(stockRef, updatedStock);
+
+    const refreshedStock = await fetchWholesalerStockView(wholesalerId);
     if (selectedWholesalerId === wholesalerId) {
-      setSelectedWholesalerStock(updatedStock);
+      setSelectedWholesalerStock(refreshedStock);
     }
+
+    setWholesalers((prev) =>
+      prev.map((ws) =>
+        ws.id === wholesalerId
+          ? {
+              ...ws,
+              hasStock: Object.entries(refreshedStock).some(
+                ([_, value]) => typeof value === "number" && value > 0
+              ),
+            }
+          : ws
+      )
+    );
   };
 
   const openDeliveryDialog = (order) => {
@@ -479,6 +673,11 @@ export default function Retailer() {
         </Toolbar>
       </AppBar>
       <Container sx={{ marginTop: "40px" }}>
+        {error && (
+          <Box sx={{ mb: 2, p: 2, borderRadius: 1, bgcolor: "#ffebee", color: "#b71c1c" }}>
+            {error}
+          </Box>
+        )}
         <Typography variant="h4" gutterBottom>Welcome, {name || email}</Typography>
 
         <Grid container spacing={4}>
@@ -490,16 +689,7 @@ export default function Retailer() {
                 <Typography variant="h5" gutterBottom>Place a New Order</Typography>
                 <Box sx={{ mt: 2 }}>
                   <Typography variant="body2" color="text.secondary">
-                    Showing wholesalers within {distanceFilterKm} km
                   </Typography>
-                  <Slider
-                    value={distanceFilterKm}
-                    onChange={(_, value) => setDistanceFilterKm(value)}
-                    valueLabelDisplay="auto"
-                    min={10}
-                    max={150}
-                    step={5}
-                  />
                 </Box>
                 <FormControl fullWidth>
                   <InputLabel id="wholesaler-select-label">Select a Wholesaler</InputLabel>
@@ -528,24 +718,62 @@ export default function Retailer() {
               <Card sx={{ p: 2, mb: 4 }}>
                 <CardContent>
                   <Typography variant="h6">Order from: {selectedWholesaler.name}</Typography>
-                  <Box sx={{ mt: 2 }}>
-                    {Object.keys(selectedWholesalerStock).filter(cat => selectedWholesalerStock[cat] > 0).length > 0 ? 
-                      Object.keys(selectedWholesalerStock)
-                        .filter(cat => selectedWholesalerStock[cat] > 0) // Only show items in stock
-                        .map((cat) => (
-                          <TextField
-                            key={cat}
-                            label={`${cat} (Avail: ${selectedWholesalerStock[cat]})`}
-                            type="number"
-                            InputProps={{ inputProps: { min: 0, max: selectedWholesalerStock[cat] } }}
-                            value={quantities[cat] || ""}
-                            onChange={(e) => handleQuantityChange(cat, e.target.value)}
-                            sx={{ width: "250px", mr: 2, mt: 2 }}
-                          />
-                        ))
-                      : <Typography color="textSecondary">This wholesaler is out of stock.</Typography>
-                    }
-                  </Box>
+                  <TableContainer component={Paper} sx={{ mt: 2 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Item</TableCell>
+                          <TableCell align="right">Price (₹)</TableCell>
+                          <TableCell align="right">Available</TableCell>
+                          <TableCell align="right">Order Qty</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {Object.keys(selectedWholesalerStock).filter(cat => selectedWholesalerStock[cat] > 0).length > 0 ? 
+                          Object.entries(selectedWholesalerStock)
+                            .filter(([key, qty]) => typeof qty === 'number' && qty > 0) // Only show numeric stock entries
+                            .map(([category, availableQty]) => {
+                              const displayName = selectedWholesalerStock.productNames?.[category] || category;
+                              const basePrice = selectedWholesalerStock?.prices?.[category] ||
+                                selectedWholesaler?.prices?.[category] ||
+                                CATEGORY_PRICES[category] || 0;
+                              const price = basePrice;
+                              return (
+                                <TableRow key={category}>
+                                  <TableCell>{displayName}</TableCell>
+                                  <TableCell align="right">₹{price.toFixed(2)}</TableCell>
+                                  <TableCell align="right">{availableQty}</TableCell>
+                                  <TableCell align="right">
+                                    <TextField
+                                      size="small"
+                                      type="number"
+                                      InputProps={{ 
+                                        inputProps: { 
+                                          min: 0, 
+                                          max: availableQty,
+                                          style: { textAlign: 'right', width: '80px' }
+                                        } 
+                                      }}
+                                      value={quantities[category] || ""}
+                                      onChange={(e) => handleQuantityChange(category, e.target.value)}
+                                    />
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })
+                          : (
+                            <TableRow>
+                              <TableCell colSpan={4} align="center">
+                                <Typography color="textSecondary" sx={{ py: 2 }}>
+                                  This wholesaler is out of stock.
+                                </Typography>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        }
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
                   {Object.keys(selectedWholesalerStock).filter(cat => selectedWholesalerStock[cat] > 0).length > 0 &&
                     <Button variant="contained" color="primary" sx={{ mt: 3 }} onClick={handleAddToCart}>Add to Cart</Button>
                   }
@@ -557,8 +785,37 @@ export default function Retailer() {
             {cart && (
               <Card sx={{ mt: 2, p: 2, border: "1px solid #004d40" }}>
                 <Typography variant="h6">Pending Order</Typography>
-                <Typography>{cart.items.map(i => `${i.category}: ${i.quantity}`).join(", ")}</Typography>
-                <Typography variant="h6" sx={{mt: 1}}>Total: ₹{cart.totalAmount}</Typography>
+                <TableContainer component={Paper} sx={{ mt: 1, mb: 1 }}>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Item</TableCell>
+                        <TableCell align="right">Price (₹)</TableCell>
+                        <TableCell align="right">Qty</TableCell>
+                        <TableCell align="right">Total (₹)</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {cart.items.map((item) => {
+                        // Use the price from the cart item which already includes the 5% markup
+                        const price = item.price;
+                        const total = price * item.quantity;
+                        return (
+                          <TableRow key={item.category}>
+                            <TableCell>{item.category}</TableCell>
+                            <TableCell align="right">₹{price.toFixed(2)}</TableCell>
+                            <TableCell align="right">{item.quantity}</TableCell>
+                            <TableCell align="right">₹{total.toFixed(2)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      <TableRow>
+                        <TableCell colSpan={3} align="right"><strong>Subtotal:</strong></TableCell>
+                        <TableCell align="right"><strong>₹{cart.totalAmount.toFixed(2)}</strong></TableCell>
+                      </TableRow>
+                    </TableBody>
+                  </Table>
+                </TableContainer>
                 <Button
                   variant="contained"
                   color="success"
@@ -597,21 +854,76 @@ export default function Retailer() {
                 <Button variant="contained" sx={{ mt: 2 }} onClick={handleSaveProfile}>Save Profile</Button>
               </CardContent>
             </Card>
-
             {/* --- My Stock --- */}
             <Card sx={{ p: 2, mb: 4 }}>
               <CardContent>
                 <Typography variant="h6" sx={{ mb: 2 }}>My Current Stock</Typography>
                 <Table size="small">
                   <TableHead>
-                    <TableRow><TableCell>Category</TableCell><TableCell align="right">Qty</TableCell></TableRow>
+                    <TableRow>
+                      <TableCell>Category</TableCell>
+                      <TableCell>Name</TableCell>
+                      <TableCell align="right">Selling Price</TableCell>
+                      <TableCell align="right">Qty</TableCell>
+                    </TableRow>
                   </TableHead>
                   <TableBody>
-                    {Object.entries(myStock).length === 0 ? (
-                      <TableRow><TableCell colSpan={2}>No stock yet. Place an order!</TableCell></TableRow>
-                    ) : Object.entries(myStock).map(([cat, qty]) => (
-                      <TableRow key={cat}><TableCell>{cat}</TableCell><TableCell align="right">{qty}</TableCell></TableRow>
-                    ))}
+                    {(() => {
+                      // Filter out 'images' and 'prices' entries from the stock
+                      const excludedKeys = new Set(['images', 'prices', 'productnames']);
+                      const validStockEntries = Object.entries(myStock).filter(
+                        ([key]) => !excludedKeys.has(key.toLowerCase())
+                      );
+                      
+                      if (validStockEntries.length === 0) {
+                        return (
+                          <TableRow>
+                            <TableCell colSpan={4}>No stock yet. Place an order!</TableCell>
+                          </TableRow>
+                        );
+                      }
+                      
+                      return validStockEntries.map(([category, value]) => {
+                        // If the value is an object, it's a nested structure (like Shirts: {Small: 1, Medium: 2})
+                        if (value && typeof value === 'object' && !Array.isArray(value)) {
+                          return Object.entries(value).map(([subCategory, qty]) => {
+                            const displayName = myStock?.productNames?.[category] || category;
+                            const storedPrice = myStock?.prices?.[category];
+                            const buyingPrice = Number(
+                              (typeof storedPrice === 'object' ? storedPrice?.[subCategory] : storedPrice) ??
+                              CATEGORY_PRICES[category]?.[subCategory] ??
+                              CATEGORY_PRICES[category] ??
+                              0
+                            );
+                            const sellingPrice = Math.ceil((buyingPrice || 0) * 1.05); // 5% markup
+                            return (
+                              <TableRow key={`${category}-${subCategory}`}>
+                                <TableCell>{category} - {subCategory}</TableCell>
+                                <TableCell>{displayName} ({subCategory})</TableCell>
+                                <TableCell align="right">₹{sellingPrice.toFixed(2)}</TableCell>
+                                <TableCell align="right">{qty}</TableCell>
+                              </TableRow>
+                            );
+                          });
+                        }
+                        // If it's a direct quantity value and not a number (to avoid showing image data)
+                        if (typeof value === 'number') {
+                          const displayName = myStock?.productNames?.[category] || category;
+                          const storedPrice = myStock?.prices?.[category];
+                          const buyingPrice = Number(storedPrice ?? CATEGORY_PRICES[category] ?? 0);
+                          const sellingPrice = Math.ceil((buyingPrice || 0) * 1.05); // 5% markup
+                          return (
+                            <TableRow key={category}>
+                              <TableCell>{category}</TableCell>
+                              <TableCell>{displayName}</TableCell>
+                              <TableCell align="right">₹{sellingPrice.toFixed(2)}</TableCell>
+                              <TableCell align="right">{value}</TableCell>
+                            </TableRow>
+                          );
+                        }
+                        return null;
+                      });
+                    })()}
                   </TableBody>
                 </Table>
               </CardContent>
