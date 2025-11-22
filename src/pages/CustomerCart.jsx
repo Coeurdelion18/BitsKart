@@ -20,9 +20,31 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import { useCart } from "../context/CartContext";
 import { openRazorpayCheckout } from "../utils/razorpay";
 import { auth, db } from "../firebase";
-import { addDoc, collection, serverTimestamp, Timestamp } from "firebase/firestore";
+import { addDoc, collection, doc, runTransaction, serverTimestamp, Timestamp } from "firebase/firestore";
 
 const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID;
+
+const deriveOrderDeliveryDate = (lines = []) => {
+  const timestamps = lines
+    .map((line) => line?.estimatedDelivery || line?.estimatedDeliveryDate)
+    .map((value) => {
+      if (!value) return null;
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+    })
+    .filter((time) => typeof time === "number");
+
+  if (!timestamps.length) return null;
+  const latest = new Date(Math.max(...timestamps));
+  return Number.isNaN(latest.getTime()) ? null : latest;
+};
+
+const formatDeliveryNote = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return `Estimated delivery ${date.toDateString()}`;
+};
+
+const FALLBACK_PAYMENT_MESSAGE = "Order Processed, Payment incomplete";
 
 export default function CustomerCart() {
   const navigate = useNavigate();
@@ -90,9 +112,13 @@ export default function CustomerCart() {
 
       await Promise.all(
         Object.entries(groupedByRetailer).map(async ([retailerId, lines]) => {
-          const retailerName = lines[0].retailerName;
-          const retailerEmail = lines[0].retailerEmail;
+          const retailerName = lines[0].retailerName || "Boutique";
+          const retailerEmail = lines[0].retailerEmail ?? null;
           const totalAmount = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);
+          const orderDeliveryDate = deriveOrderDeliveryDate(lines);
+          const deliveryNote = formatDeliveryNote(orderDeliveryDate);
+          const paymentNote = paymentResponse ? "Order placed with payment" : FALLBACK_PAYMENT_MESSAGE;
+          const statusNote = [paymentNote, deliveryNote].filter(Boolean).join(" • ");
 
           await addDoc(collection(db, "customerOrders"), {
             retailerId,
@@ -105,6 +131,9 @@ export default function CustomerCart() {
               category: line.category,
               quantity: line.quantity,
               price: line.price,
+              estimatedDelivery: line.estimatedDelivery || null,
+              deliveryDays: line.deliveryDays || null,
+              distanceKm: line.distanceKm ?? null,
             })),
             totalAmount,
             status: "Placed",
@@ -112,7 +141,7 @@ export default function CustomerCart() {
               {
                 status: "Placed",
                 timestamp: Timestamp.now(),
-                note: paymentResponse ? "Order placed with payment" : "Order placed without payment",
+                note: statusNote,
               },
             ],
             createdAt: Timestamp.now(),
@@ -121,12 +150,15 @@ export default function CustomerCart() {
             razorpaySignature: paymentResponse?.razorpay_signature || null,
             paymentStatus: paymentResponse ? "paid" : "pending",
             paymentErrorMessage: paymentError?.message || null,
+            estimatedDeliveryDate: orderDeliveryDate?.toISOString() || null,
           });
+
+          await decrementRetailerStock(lines, retailerId);
         })
       );
 
       clearCart();
-      alert(paymentResponse ? "Payment successful and orders placed!" : "Orders placed. Payment pending.");
+      alert(paymentResponse ? "Payment successful and orders placed!" : FALLBACK_PAYMENT_MESSAGE);
       navigate("/customer");
     } catch (error) {
       console.error("Failed to complete checkout", error);
@@ -251,3 +283,23 @@ const BoxShell = ({ children }) => (
     {children}
   </div>
 );
+
+const decrementRetailerStock = async (orderItems, retailerId) => {
+  if (!retailerId || !orderItems?.length) return;
+  const stockRef = doc(db, "stocks", retailerId);
+
+  await runTransaction(db, async (transaction) => {
+    const stockSnap = await transaction.get(stockRef);
+    const existingStock = stockSnap.exists() ? stockSnap.data() : {};
+    const updatedStock = { ...existingStock };
+
+    orderItems.forEach(({ category, quantity }) => {
+      if (!category) return;
+      const current = parseInt(updatedStock[category], 10) || 0;
+      const decrementBy = parseInt(quantity, 10) || 0;
+      updatedStock[category] = Math.max(0, current - decrementBy);
+    });
+
+    transaction.set(stockRef, updatedStock, { merge: true });
+  });
+};

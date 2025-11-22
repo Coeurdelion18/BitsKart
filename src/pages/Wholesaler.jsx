@@ -618,12 +618,13 @@ export default function Wholesaler() {
                   <TableCell>Category</TableCell>
                   <TableCell>Product Name</TableCell>
                   <TableCell>Qty</TableCell>
+                  <TableCell>Amount</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {Object.keys(DEFAULT_CATEGORY_PRICES).length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={3}>No categories available</TableCell>
+                    <TableCell colSpan={4}>No categories available</TableCell>
                   </TableRow>
                 ) : (
                   Object.keys(DEFAULT_CATEGORY_PRICES).map((cat) => (
@@ -631,7 +632,7 @@ export default function Wholesaler() {
                       <TableCell>{cat}</TableCell>
                       <TableCell>{productNames[cat] || 'Not specified'}</TableCell>
                       <TableCell>{typeof stock[cat] === 'number' ? stock[cat] : 0}</TableCell>
-                      <TableCell>₹{prices[cat] || 0}</TableCell>
+                      <TableCell>₹{(prices[cat] || 0).toFixed(2)}</TableCell>
                     </TableRow>
                   ))
                 )}
