@@ -67,12 +67,12 @@ export default function Login() {
             <Typography variant="h3" className="gradient-text" sx={{ fontWeight: 700 }}>
               Welcome back to BITSmart
             </Typography>
-            <Typography variant="h6" sx={{ mt: 2, color: "rgba(248,250,252,0.75)" }}>
+            <Typography variant="h6" sx={{ mt: 2, color: "rgba(241, 243, 245, 0.75)" }}>
               Authenticate with Google, grab the console OTP, and unlock a dashboard tailored to your role.
             </Typography>
             <Box sx={{ mt: 4, display: "grid", gap: 1 }}>
               {["Customers", "Retailers", "Wholesalers"].map((item) => (
-                <Typography key={item} sx={{ color: "rgba(248,250,252,0.65)" }}>
+                <Typography key={item} sx={{ color: "rgba(7, 86, 165, 0.76)" }}>
                   • {item} enjoy bespoke tooling, synchronized inventories, and delightful UI polish.
                 </Typography>
               ))}
@@ -111,9 +111,9 @@ export default function Login() {
                   >
                     Continue with Google
                   </Button>
-                  <Typography variant="body2" sx={{ color: "rgba(248,250,252,0.6)", textAlign: "center" }}>
+                  {/* <Typography variant="body2" sx={{ color: "rgba(11, 116, 221, 0.6)", textAlign: "center" }}>
                     We log your OTP securely in the console. Paste it below to finish verifying.
-                  </Typography>
+                  </Typography> */}
                 </>
               ) : (
                 <>
@@ -126,7 +126,7 @@ export default function Login() {
                   />
                   <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
                     <Button
-                      sx={{ flex: 1, py: 1.2, fontWeight: 600 }}
+                      sx={{ flex: 1, py: 1.2, fontWeight: 600}}
                       variant="contained"
                       onClick={handleVerifyOtp}
                       disabled={isVerifying || !enteredOtp}
@@ -134,7 +134,7 @@ export default function Login() {
                       {isVerifying ? "Verifying..." : "Verify & Continue"}
                     </Button>
                     <Button
-                      sx={{ flex: 1, py: 1.2, color: "#f8fafc" }}
+                      sx={{ flex: 1, py: 1.2, color: "#145bc6d2" }}
                       variant="outlined"
                       onClick={() => {
                         setOtpStage(false);

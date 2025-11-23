@@ -1,5 +1,6 @@
-import { Box, Button, Card, CardContent, Chip, Container, Grid, Stack, Typography } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { Box, Card, CardContent, Chip, Container, Grid, Stack, Typography } from '@mui/material';
+import CustomButton from '../components/CustomButton';
+import styles from '../styles/Home.module.css';
 
 const highlights = [
   { label: 'Live Inventory Sync', value: '24/7' },
@@ -11,36 +12,35 @@ const personas = [
   {
     title: 'Customers',
     description: 'Discover curated collections, hyper-personalized to your neighbourhood trends.',
-    cta: 'Enter Boutique Experience',
+    cta: (<span style={{ color: '#ffffff' }}>Enter Boutique Experience</span>),
     route: '/customer',
     accent: '#34d399',
   },
   {
     title: 'Retailers',
     description: 'Source premium stock, track logistics, and delight your shoppers from one dashboard.',
-    cta: 'Go to Retail Control',
+    cta:(<span style={{ color: '#ffffff' }}>Go to Retail Control</span>),
     route: '/retailer',
     accent: '#60a5fa',
   },
   {
     title: 'Wholesalers',
     description: 'Broadcast inventory, analyze demand, and power the entire value chain.',
-    cta: 'Manage Wholesale Ops',
+    cta:(<span style={{ color: '#ffffff' }}>Manage Wholesale Ops</span>),
     route: '/wholesaler',
     accent: '#c084fc',
   },
 ];
 
 export default function Home() {
-  const navigate = useNavigate();
 
   return (
-    <Box className="page-shell">
-      <div className="glow-circle pink floating" />
-      <div className="glow-circle blue" />
+    <Box className={styles.pageShell}>
+      <div className={`${styles.glowCircle} ${styles.pink} ${styles.floating}`} />
+      <div className={`${styles.glowCircle} ${styles.blue}`} />
       <Container maxWidth="lg" sx={{ position: 'relative', zIndex: 1 }}>
         <Box
-          className="glass-panel"
+          className={styles.glassPanel}
           sx={{
             p: { xs: 4, md: 6 },
             mt: 6,
@@ -48,17 +48,17 @@ export default function Home() {
           }}
         >
           <Chip label="Intelligent Commerce Network" color="secondary" sx={{ mb: 3, fontWeight: 600 }} />
-          <Typography variant="h2" className="gradient-text" sx={{ fontWeight: 700 }}>
+          <Typography variant="h2" className={styles.gradientText} sx={{ fontWeight: 700 }}>
             Design tomorrow's fashion supply chain.
           </Typography>
           <Typography variant="h6" sx={{ mt: 2, color: 'rgba(248,250,252,0.75)' }}>
             BITSmart unifies customers, boutique retailers, and wholesalers inside a single luminous experience.
           </Typography>
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center" sx={{ mt: 4 }}>
-            <Button
+            <CustomButton
               variant="contained"
               size="large"
-              onClick={() => navigate('/login')}
+              to="/login"
               sx={{
                 px: 5,
                 py: 1.5,
@@ -66,18 +66,18 @@ export default function Home() {
               }}
             >
               Get Started
-            </Button>
-            <Button
+            </CustomButton>
+            <CustomButton
               variant="outlined"
               size="large"
-              onClick={() => navigate('/login')}
+              to="/login"
               sx={{ borderColor: 'rgba(248,250,252,0.4)', color: '#f8fafc' }}
             >
               Explore Demo
-            </Button>
+            </CustomButton>
           </Stack>
 
-          <Grid container spacing={3} sx={{ mt: 5 }}>
+          <Grid container spacing={3} sx={{ mt: 5, justifyContent: 'center' }}>
             {highlights.map((item) => (
               <Grid item xs={12} md={4} key={item.label}>
                 <Box sx={{ borderRadius: 3, p: 3, border: '1px solid rgba(255,255,255,0.15)' }}>
@@ -92,15 +92,16 @@ export default function Home() {
         <Typography variant="h4" sx={{ mt: 8, mb: 3, fontWeight: 600 }}>
           Craft bespoke journeys for every role
         </Typography>
-        <div className="neon-divider" />
-
-        <Grid container spacing={3} sx={{ mt: 1 }}>
+        <div className={styles.neonDivider} />
+        <Grid container spacing={3} sx={{ mt: 1, justifyContent: 'center' }}>
           {personas.map((persona) => (
-            <Grid item xs={12} md={4} key={persona.title}>
+            <Grid item xs={12} md={4} key={persona.title} sx={{ display: 'flex', justifyContent: 'center' }}>
               <Card
-                className="glass-panel"
+                className={styles.glassPanel}
                 sx={{
                   height: '100%',
+                  width: '100%',
+                  maxWidth: '400px',
                   borderColor: 'transparent',
                   p: 1,
                   background: 'rgba(15,23,42,0.6)',
@@ -122,7 +123,7 @@ export default function Home() {
                   <Typography variant="body2" sx={{ mt: 1.5, color: 'rgba(248,250,252,0.7)' }}>
                     {persona.description}
                   </Typography>
-                  <Button
+                  <CustomButton
                     fullWidth
                     sx={{
                       mt: 3,
@@ -131,10 +132,10 @@ export default function Home() {
                       background: `linear-gradient(120deg, ${persona.accent}, #0ea5e9)`
                     }}
                     variant="contained"
-                    onClick={() => navigate(persona.route)}
+                    to={persona.route}
                   >
                     Launch {persona.title}
-                  </Button>
+                  </CustomButton>
                 </CardContent>
               </Card>
             </Grid>

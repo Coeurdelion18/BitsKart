@@ -1,14 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  // ... your existing imports ...
+  Card,
+  CardContent,
+  CardActions,  // Add this line
+  // ... rest of your imports ...
+} from "@mui/material";
 import { useNavigate } from "react-router-dom";
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import {
   AppBar,
   Toolbar,
   Typography,
   Button,
-  Grid,
-  Card,
+  Grid, 
   CardActionArea,
-  CardContent,
   Container,
   Box,
   Chip,
@@ -33,6 +39,35 @@ import { useCart } from "../context/CartContext";
 import { calculateDistanceKm } from "../utils/geo";
 import { seedDemoData } from "../utils/demoSeeder";
 
+
+const calculateEstimatedDeliveryDate = (distanceKm) => {
+  const baseDays = 1; // Base delivery time in days
+  const daysPer50Km = 0.5; // Additional days per 50km
+  
+  const additionalDays = Math.ceil((distanceKm / 50) * daysPer50Km);
+  const totalDays = baseDays + additionalDays;
+  
+  const deliveryDate = new Date();
+  deliveryDate.setDate(deliveryDate.getDate() + totalDays);
+  
+  return {
+    estimatedDelivery: deliveryDate,
+    deliveryDays: totalDays
+  };
+};
+
+const formatDeliveryEstimate = (estimatedDelivery) => {
+  const today = new Date();
+  const deliveryDate = new Date(estimatedDelivery);
+  const diffTime = Math.abs(deliveryDate - today);
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Tomorrow';
+  if (diffDays <= 7) return `In ${diffDays} days (${deliveryDate.toDateString()})`;
+  return deliveryDate.toDateString();
+};
+
 const categories = [
   { name: "Shirts", gradient: "linear-gradient(135deg,#f97316,#fb7185)" },
   { name: "Trousers", gradient: "linear-gradient(135deg,#0ea5e9,#6366f1)" },
@@ -48,6 +83,17 @@ const stats = [
   { title: "Reward Points", value: "3,420" },
 ];
 
+const CUSTOMER_PRICE_MULTIPLIER = 1.05;
+
+const DEFAULT_CUSTOMER_PRICES = {
+  Shirts: 1299,
+  Trousers: 1499,
+  Jackets: 2799,
+  Shoes: 2199,
+  Accessories: 799,
+  "Ethnic Wear": 3299,
+};
+
 const DEFAULT_LOCATION = { lat: 12.9716, lng: 77.5946 };
 
 const formatDistanceLabel = (distanceKm) => {
@@ -57,20 +103,43 @@ const formatDistanceLabel = (distanceKm) => {
   return "Distance unavailable";
 };
 
-const CATEGORY_PRICES = {
-  Shirts: 1299,
-  Trousers: 1499,
-  Jackets: 2799,
-  Shoes: 2199,
-  Accessories: 799,
-  "Ethnic Wear": 3299,
+const normalizeCategoryKey = (categoryName = "") =>
+  categoryName.toLowerCase().replace(/\s+/g, "");
+
+const parsePositiveNumber = (value) => {
+  const num = typeof value === "number" ? value : parseFloat(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
+};
+
+const resolveDisplayPrice = (price, categoryName) =>
+  parsePositiveNumber(price) ?? parsePositiveNumber(DEFAULT_CUSTOMER_PRICES[categoryName]) ?? 0;
+
+const getRetailerPriceForCategory = (retailer = {}, categoryName) => {
+  if (!categoryName) return 0;
+  const normalizedKey = `${normalizeCategoryKey(categoryName)}Price`;
+  const priceSources = [
+    retailer?.prices?.[categoryName],
+    retailer?.stock?.prices?.[categoryName],
+    retailer?.[normalizedKey],
+    retailer?.[`${categoryName.toLowerCase()}Price`],
+  ];
+
+  for (const source of priceSources) {
+    const parsed = parsePositiveNumber(source);
+    if (parsed !== null) return Math.ceil(parsed * CUSTOMER_PRICE_MULTIPLIER);
+  }
+
+  return resolveDisplayPrice(undefined, categoryName);
 };
 
 const mapContainerStyle = {
-  width: "100%",
-  height: "400px",
-  borderRadius: "16px",
-  marginTop: "30px",
+  width: '100%',
+  height: 'calc(100% - 80px)',
+  position: 'absolute',
+  bottom: 0,
+  left: 0,
+  right: 0,
+  top: '80px',
 };
 
 export default function Customer() {
@@ -87,6 +156,9 @@ export default function Customer() {
   const [desiredQty, setDesiredQty] = useState(1);
   const [isSeeding, setIsSeeding] = useState(false);
   const [distanceFilterKm, setDistanceFilterKm] = useState(30);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [viewingCategory, setViewingCategory] = useState(false);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -151,28 +223,44 @@ export default function Customer() {
       .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity)),
   [retailers, customerLocation]);
 
-  const filteredRetailersByDistance = useMemo(
+  const filteredRetailers = useMemo(
     () =>
       retailersByDistance.filter((retailer) => {
-        if (retailer.distanceKm == null) return true;
-        return retailer.distanceKm <= distanceFilterKm;
+        // Filter by distance
+        if (retailer.distanceKm != null && retailer.distanceKm > distanceFilterKm) {
+          return false;
+        }
+        
+        // Filter by search term (case-insensitive)
+        if (searchTerm && !retailer.name.toLowerCase().includes(searchTerm.toLowerCase())) {
+          return false;
+        }
+        
+        // Filter by category if one is selected
+        if (selectedCategory && (!retailer.stock || !retailer.stock[selectedCategory])) {
+          return false;
+        }
+        
+        return true;
       }),
-    [retailersByDistance, distanceFilterKm]
+    [retailersByDistance, distanceFilterKm, searchTerm, selectedCategory]
   );
 
   const categoryRetailerMap = useMemo(() => {
     const map = {};
-    filteredRetailersByDistance.forEach((retailer) => {
+    filteredRetailers.forEach((retailer) => {
       categories.forEach((category) => {
         const availableQty = retailer.stock?.[category.name] || 0;
         if (availableQty > 0) {
           if (!map[category.name]) map[category.name] = [];
+          const price = getRetailerPriceForCategory(retailer, category.name);
+          
           map[category.name].push({
             retailerId: retailer.id,
             retailerName: retailer.name || retailer.email || "Retailer",
             retailerEmail: retailer.email,
             availableQty,
-            price: CATEGORY_PRICES[category.name] || 0,
+            price: price,
             distanceKm: retailer.distanceKm,
             location: retailer.location,
           });
@@ -180,7 +268,7 @@ export default function Customer() {
       });
     });
     return map;
-  }, [filteredRetailersByDistance]);
+  }, [filteredRetailers]);
 
   const recommendedCategories = useMemo(() =>
     categories
@@ -206,7 +294,7 @@ export default function Customer() {
   const handleOpenCategoryDialog = (categoryName) => {
     const retailersForCategory = categoryRetailerMap[categoryName] || [];
     if (!retailersForCategory.length) {
-      alert("This item is currently out of stock across all boutiques.");
+      alert("This item is currently out of stock across all shops.");
       return;
     }
     setDialogCategory(categoryName);
@@ -214,6 +302,22 @@ export default function Customer() {
     setDesiredQty(1);
     setDialogOpen(true);
   };
+  //Function to handle view all category
+  const handleViewAllCategory = (categoryName) => {
+    console.log('View all clicked for category:', categoryName);
+    console.log('Current retailers:', filteredRetailers);
+    setSelectedCategory(categoryName);
+    setViewingCategory(true);
+    // Scroll to the top of the page
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  //handle back to main
+  const handleBackToMain = () => {
+    setViewingCategory(false);
+    setSelectedCategory('');
+  };
+
 
   const handleCloseDialog = () => {
     setDialogOpen(false);
@@ -230,21 +334,31 @@ export default function Customer() {
   };
 
   const handleAddToCart = () => {
-    if (!activeRetailer || !dialogCategory) return;
-    addItem(
-      {
-        retailerId: activeRetailer.retailerId,
-        retailerName: activeRetailer.retailerName,
-        retailerEmail: activeRetailer.retailerEmail,
-        category: dialogCategory,
-        price: activeRetailer.price,
-        availableQty: activeRetailer.availableQty,
-      },
-      desiredQty
-    );
-    alert(`${dialogCategory} added to cart from ${activeRetailer.retailerName}.`);
-    handleCloseDialog();
-  };
+  if (!activeRetailer || !dialogCategory) return;
+  
+  // Calculate delivery estimate
+  const distance = activeRetailer.distanceKm || 0;
+  const { estimatedDelivery, deliveryDays } = calculateEstimatedDeliveryDate(distance);
+  
+  addItem(
+    {
+      retailerId: activeRetailer.retailerId,
+      retailerName: activeRetailer.retailerName,
+      retailerEmail: activeRetailer.retailerEmail,
+      category: dialogCategory,
+      price: activeRetailer.price,
+      availableQty: activeRetailer.availableQty,
+      distanceKm: distance,
+      estimatedDelivery: estimatedDelivery.toISOString(),
+      deliveryDays,
+      addedAt: new Date().toISOString()
+    },
+    desiredQty
+  );
+  
+  alert(`${dialogCategory} added to cart from ${activeRetailer.retailerName}.\nEstimated delivery: ${formatDeliveryEstimate(estimatedDelivery)}`);
+  handleCloseDialog();
+};
 
   const scrollToCollections = () => {
     document.getElementById("customer-collections")?.scrollIntoView({ behavior: "smooth" });
@@ -283,24 +397,168 @@ export default function Customer() {
     }
   };
 
+  if (viewingCategory && selectedCategory) {
+    try {
+      console.log('Rendering category view for:', selectedCategory);
+      const selectedCategoryConfig = categories.find((cat) => cat.name === selectedCategory);
+      const categoryItems = filteredRetailers
+        .filter(retailer => {
+          const hasStock = retailer.stock?.[selectedCategory] > 0;
+          console.log(`Retailer ${retailer.id} has stock:`, hasStock, 'stock:', retailer.stock);
+          return hasStock;
+        })
+        .map(retailer => {
+          console.log('Mapping retailer:', retailer.id, 'with stock:', retailer.stock);
+          return {
+            ...retailer,
+            category: selectedCategory,
+            price: getRetailerPriceForCategory(retailer, selectedCategory),
+            gradient: selectedCategoryConfig?.gradient,
+          };
+        });
+
+      console.log('Category items:', categoryItems);
+
+      return (
+        <Container maxWidth="lg" sx={{ py: 4 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+            <IconButton onClick={handleBackToMain} sx={{ mr: 2 }}>
+              <ArrowBackIcon />
+            </IconButton>
+            <Typography variant="h4" component="h1">
+              {selectedCategory} ({categoryItems.length} items)
+            </Typography>
+          </Box>
+          
+          {categoryItems.length === 0 ? (
+            <Typography>No items found for this category.</Typography>
+          ) : (
+            <Grid container spacing={3}>
+              {categoryItems.map((item, index) => {
+                const displayPrice = resolveDisplayPrice(item.price, selectedCategory);
+                return (
+                  <Grid item xs={12} sm={6} md={4} lg={3} key={`${item.id}-${index}`}>
+                    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                      <CardContent sx={{ flexGrow: 1 }} 
+                      style={{  backgroundImage: item.gradient, 
+                                backgroundSize: 'cover', 
+                                backgroundPosition: 'center', 
+                                backgroundRepeat: 'no-repeat', 
+                                }}>
+                        <Typography variant="h6" gutterBottom>
+                          {item.name || 'Unnamed Retailer'}
+                        </Typography>
+                        <Typography color="textSecondary" gutterBottom>
+                          {item.distanceKm ? `${item.distanceKm.toFixed(1)} km away` : 'Distance not available'}
+                        </Typography>
+                        <Typography variant="h6" color="primary">
+                          ₹{displayPrice.toLocaleString()}
+                        </Typography>
+                        <Typography variant="body2" color="textSecondary">
+                          Available: {item.stock?.[selectedCategory] || 0} units
+                        </Typography>
+                      </CardContent>
+                      <CardActions>
+                        <Button 
+                          fullWidth 
+                          variant="contained" 
+                          onClick={() => {
+                            const distance = item.distanceKm || 0;
+                            const { estimatedDelivery } = calculateEstimatedDeliveryDate(distance);
+                            addItem(
+                              {
+                                retailerId: item.id,
+                                retailerName: item.name,
+                                category: selectedCategory,
+                                price: displayPrice,
+                                availableQty: item.stock?.[selectedCategory] || 0,
+                                distanceKm: distance,
+                                estimatedDelivery: estimatedDelivery.toISOString(),
+                                addedAt: new Date().toISOString()
+                              },
+                              1
+                            );
+                            alert(`${selectedCategory} added to cart from ${item.name}\nEstimated delivery: ${estimatedDelivery.toDateString()}\nPrice: ₹${displayPrice}`);
+                          }}
+                        >
+                          Add to Cart
+                        </Button>
+                      </CardActions>
+                    </Card>
+                  </Grid>
+                );
+              })}
+            </Grid>
+          )}
+        </Container>
+      );
+    } catch (error) {
+      console.error('Error rendering category view:', error);
+      return (
+        <Container maxWidth="lg" sx={{ py: 4 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+            <IconButton onClick={handleBackToMain} sx={{ mr: 2 }}>
+              <ArrowBackIcon />
+            </IconButton>
+            <Typography variant="h5" color="error">
+              Error loading {selectedCategory}
+            </Typography>
+          </Box>
+          <Typography>Please try again later.</Typography>
+          <Button 
+            variant="contained" 
+            onClick={handleBackToMain}
+            sx={{ mt: 2 }}
+          >
+            Go Back
+          </Button>
+        </Container>
+      );
+    }
+  }
+
   return (
-    <Box className="page-shell" sx={{ overflow: "hidden" }}>
+    <Box className="page-shell" sx={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       <div className="glow-circle pink floating" />
       <div className="glow-circle blue" />
       <AppBar
         position="sticky"
         elevation={0}
         sx={{
-          backgroundColor: "rgba(15,23,42,0.8)",
-          backdropFilter: "blur(14px)",
+          backgroundColor: "rgba(15,23,42,0.95)",
+          backdropFilter: "blur(10px)",
           borderBottom: "1px solid rgba(255,255,255,0.1)",
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          zIndex: (theme) => theme.zIndex.drawer + 1,
+          top: 0,
+          position: 'sticky',
+          width: '100%',
+          flexShrink: 0
         }}
       >
-        <Toolbar sx={{ display: "flex", justifyContent: "space-between" }}>
-          <Typography variant="h6" className="gradient-text" sx={{ fontWeight: 700 }}>
+        <Toolbar>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700 }}>
             BITSmart Customer
           </Typography>
-          <Stack direction="row" spacing={1}>
+          <Box sx={{ display: 'flex', alignItems: 'center', width: '100%', maxWidth: '600px', ml: 2 }}>
+            <TextField
+              fullWidth
+              variant="outlined"
+              size="small"
+              placeholder="Search boutiques..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              sx={{ mb: 2, backgroundColor: "rgba(255, 255, 255, 1)" }}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <Box sx={{ mr: 1, color: 'text.secondary' }}>🔍</Box>
+                  ),
+                },
+              }}
+            />
+
+            <Stack direction="row" spacing={1}>
             <Button
               color="inherit"
               startIcon={
@@ -323,6 +581,30 @@ export default function Customer() {
               Logout
             </Button>
           </Stack>
+          </Box>
+          {/* <Stack direction="row" spacing={1}>
+            <Button
+              color="inherit"
+              startIcon={
+                <Badge badgeContent={totalItems} color="secondary" overlap="circular" showZero>
+                  <ShoppingCartIcon />
+                </Badge>
+              }
+              onClick={() => navigate("/cart")}
+            >
+              Cart
+            </Button>
+            <Button
+              color="inherit"
+              startIcon={<HistoryIcon />}
+              onClick={() => navigate("/history")}
+            >
+              History
+            </Button>
+            <Button color="inherit" onClick={handleLogout}>
+              Logout
+            </Button>
+          </Stack> */}
         </Toolbar>
       </AppBar>
 
@@ -399,8 +681,8 @@ export default function Customer() {
                   </Button>
                 </Stack>
                 <Box sx={{ mt: 3 }}>
-                  <Typography variant="body2" sx={{ color: "rgba(248,250,252,0.7)", mb: 1 }}>
-                    Showing boutiques within {distanceFilterKm} km
+                  <Typography variant="subtitle2" color="textSecondary">
+                    Showing {filteredRetailers.length} boutiques{selectedCategory ? ` with ${selectedCategory}` : ''}{searchTerm ? ` matching "${searchTerm}"` : ''}
                   </Typography>
                   <Slider
                     value={distanceFilterKm}
@@ -412,53 +694,7 @@ export default function Customer() {
                   />
                 </Box>
               </Grid>
-              <Grid item xs={12} md={6}>
-                <Card className="glass-panel" sx={{ p: 3 }}>
-                  <Typography variant="subtitle2" sx={{ color: "rgba(248,250,252,0.7)", mb: 2 }}>
-                    This week
-                  </Typography>
-                  <Grid container spacing={2}>
-                    {stats.map((stat) => (
-                      <Grid item xs={12} sm={4} key={stat.title}>
-                        <Box sx={{ textAlign: "center" }}>
-                          <Typography variant="h4" sx={{ fontWeight: 700 }}>{stat.value}</Typography>
-                          <Typography variant="body2" sx={{ color: "rgba(248,250,252,0.7)" }}>{stat.title}</Typography>
-                        </Box>
-                      </Grid>
-                    ))}
-                  </Grid>
-                </Card>
-              </Grid>
-            </Grid>
-
-            <Typography id="customer-collections" variant="h4" sx={{ mt: 8, fontWeight: 600 }}>
-              Explore curated drops
-            </Typography>
-            <div className="neon-divider" />
-            {recommendedCategories.length > 0 && (
-              <Card className="glass-panel" sx={{ p: 3, mb: 3 }}>
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  Tailored to your location
-                </Typography>
-                <Typography variant="body2" sx={{ color: "rgba(248,250,252,0.72)", mb: 2 }}>
-                  These categories are currently in stock at boutiques closest to you.
-                </Typography>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-                  {recommendedCategories.map((rec) => (
-                    <Box key={rec.name} className="glass-panel" sx={{ flex: 1, p: 2 }}>
-                      <Typography variant="subtitle2" sx={{ color: "rgba(248,250,252,0.7)", mb: 0.5 }}>
-                        {rec.retailerName}
-                      </Typography>
-                      <Typography variant="h5" sx={{ fontWeight: 700 }}>{rec.name}</Typography>
-                      <Typography variant="body2" sx={{ color: "rgba(248,250,252,0.65)" }}>
-                        {formatDistanceLabel(rec.distanceKm)}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Stack>
-              </Card>
-            )}
-            <Grid container spacing={3} sx={{ mt: 1 }}>
+              {/* <Grid container spacing={3} sx={{ mt: 1 }}>
               {categories.map((cat) => {
                 const available = (categoryRetailerMap[cat.name] || []).length > 0;
                 const closestRetailer = available ? categoryRetailerMap[cat.name][0] : null;
@@ -491,28 +727,191 @@ export default function Customer() {
                   </Grid>
                 );
               })}
+            </Grid> */}
+              <Grid item xs={12} md={6}>
+                <Card className="glass-panel" sx={{ p: 3 }}>
+                  <Typography variant="h5" sx={{ color: "rgba(5, 57, 109, 0.83)", mb: 2 }}>
+                    This week
+                  </Typography>
+                  
+                  
+                  <Grid container spacing={2}>
+                    {stats.map((stat) => (
+                      <Grid item xs={12} sm={4} key={stat.title}>
+                        <Box sx={{ p: 2, textAlign: 'center' }}>
+                          <Typography variant="h6" sx={{ fontWeight: 600 }}>{stat.value}</Typography>
+                          <Typography variant="body2" sx={{ color: "rgba(0, 5, 9, 0.7)" }}>{stat.title}</Typography>
+                        </Box>
+                      </Grid>
+                    ))}
+                  </Grid>
+                </Card>
+              </Grid>
             </Grid>
 
-            <Grid container spacing={4} sx={{ mt: 6 }} alignItems="stretch">
-              <Grid item xs={12} md={6}>
-                <Card className="glass-panel" sx={{ height: "100%", p: 4 }}>
-                  <Typography variant="h5" sx={{ fontWeight: 600, mb: 2 }}>Why customers stay</Typography>
-                  <Stack spacing={2}>
-                    {["1:1 boutique messaging", "Adaptive recommendations", "Unified checkout"]
+            <Typography id="customer-collections" variant="h4" sx={{ mt: 8, fontWeight: 600 }}>
+              Explore curated drops
+            </Typography>
+            <div className="neon-divider" />
+
+            
+            
+            {/* Products Grid */}
+            <Box sx={{ mt: 6 }}>
+              <Grid container spacing={3}>
+                {categories.map((category) => {
+                  const categoryRetailers = categoryRetailerMap[category.name] || [];
+                  const productCount = categoryRetailers.reduce(
+                    (total, curr) => total + (curr.availableQty || 0), 0
+                  );
+                  
+                  return (
+                    <Grid item xs={12} key={category.name}>
+                      <Card sx={{ mb: 4, background: 'rgba(255, 255, 255, 0.1)', backdropFilter: 'blur(10px)' }}>
+                        <Box sx={{ p: 3 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                            <Typography variant="h6" sx={{ fontWeight: 600,color:'rgba(252, 251, 248, 0.8)' }}>
+                              {category.name}
+                              <Typography component="span" sx={{ ml: 1, color: 'rgba(252, 251, 248, 0.8)' }}>
+                                ({productCount} items)
+                              </Typography>
+                            </Typography>
+                            <Button 
+                              variant="outlined" 
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation(); 
+                                handleViewAllCategory(category.name)
+                              }} 
+                              sx={{ textTransform: 'none' }}
+                            >
+                              View all
+                            </Button>
+                          </Box>
+                          
+                          <Grid container spacing={2}>
+                            {categoryRetailers.slice(0, 4).map((retailer, idx) => {
+                              const displayPrice = resolveDisplayPrice(retailer.price, category.name);
+                              return (
+                                <Grid item xs={6} sm={4} md={3} key={`${retailer.retailerId}-${idx}`}>
+                                  <Card 
+                                    sx={{ 
+                                      height: '100%', 
+                                      display: 'flex', 
+                                      flexDirection: 'column',
+                                      transition: 'transform 0.2s',
+                                      '&:hover': {
+                                        transform: 'translateY(-4px)',
+                                        boxShadow: 3
+                                      }
+                                    }}
+                                  >
+                                    <Box 
+                                      sx={{ 
+                                        height: 160, 
+                                        background: category.gradient,
+                                        position: 'relative',
+                                        overflow: 'hidden',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: 'white',
+                                        fontSize: '2rem',
+                                        fontWeight: 600,
+                                        textShadow: '1px 1px 3px rgba(0,0,0,0.3)'
+                                      }}
+                                    >
+                                      {category.name.charAt(0)}
+                                    </Box>
+                                    <CardContent sx={{ flexGrow: 1, p: 2 }}>
+                                      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 0.5 }}>
+                                        {category.name}
+                                      </Typography>
+                                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                                        {retailer.retailerName}
+                                      </Typography>
+                                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <Typography variant="h6" color="primary">
+                                          ₹{displayPrice.toLocaleString()}
+                                        </Typography>
+                                        <Chip 
+                                          label={`${retailer.availableQty} in stock`} 
+                                          size="small" 
+                                          color={retailer.availableQty > 5 ? 'success' : 'warning'}
+                                        />
+                                      </Box>
+                                    </CardContent>
+                                    <CardActions>
+                                      <Button 
+                                        fullWidth 
+                                        variant="contained" 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const distance = retailer.distanceKm || 0;
+                                          const { estimatedDelivery } = calculateEstimatedDeliveryDate(distance);
+                                          addItem(
+                                            {
+                                              retailerId: retailer.retailerId,
+                                              retailerName: retailer.retailerName,
+                                              category: category.name,
+                                              price: displayPrice,
+                                              availableQty: retailer.availableQty,
+                                              distanceKm: distance,
+                                              estimatedDelivery: estimatedDelivery.toISOString(),
+                                              addedAt: new Date().toISOString()
+                                            },
+                                            1
+                                          );
+                                          alert(`${category.name} added to cart from ${retailer.retailerName}\nEstimated delivery: ${estimatedDelivery.toDateString()}\nPrice: ₹${displayPrice}`);
+                                        }}
+                                      >
+                                        Add to Cart
+                                      </Button>
+                                    </CardActions>
+                                  </Card>
+                                </Grid>
+                              );
+                            })}
+                          </Grid>
+                        </Box>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            </Box>
+            
+            {/*Customer Reviews*/}
+            <Grid container spacing={4} sx={{ mt: 6 }}>
+              <Grid item xs={12} md={2} sx ={{width:'100%'}}>
+                <Card className="glass-panel" sx={{ p: 3, height: 'fit-content' }}>
+                  <Typography variant="h6" sx={{ fontWeight: 600, mb: 2, fontSize: '1rem' }}>What customers say</Typography>
+                  <Stack spacing={1.5}>
+                    {["1:1 messaging", "Smart picks", "Easy checkout"]
                       .map((item) => (
-                        <Chip key={item} label={item} sx={{ backgroundColor: "rgba(255,255,255,0.08)", color: "#f8fafc" }} />
+                        <Chip 
+                          key={item} 
+                          label={item} 
+                          size="small"
+                          sx={{ 
+                            backgroundColor: "rgba(14, 0, 0, 0.08)", 
+                            color: "#090909ff",
+                            fontSize: '0.75rem',
+                            height: '24px'
+                          }} 
+                        />
                       ))}
                   </Stack>
                 </Card>
               </Grid>
-              <Grid item xs={12} md={6}>
-                <Card className="glass-panel" sx={{ p: 0, overflow: "hidden" }}>
+              <Grid item xs={12} md={10} sx={{ width: '100%' }}>
+                <Card className="glass-panel" sx={{ p: 0, overflow: 'hidden', width: '100%', height: '600px' }}>
+                  {/*Stores near you*/}
                   <Box sx={{ p: 4 }}>
                     <Typography variant="h5" sx={{ fontWeight: 600 }}>Stores near you</Typography>
-                    <Typography variant="body2" sx={{ color: "rgba(248,250,252,0.7)", mb: 2 }}>
-                      Tap a pin to preview real-time stock.
-                    </Typography>
                   </Box>
+
+                  {/*Google Maps API implementation */}
                   <LoadScript googleMapsApiKey="AIzaSyCsN0VtNMbHd96oGj7Ch16FVqHQoyT0Uqc">
                     <GoogleMap mapContainerStyle={mapContainerStyle} center={mapCenter} zoom={12}>
                       <Marker position={customerLocation} label="You" />
@@ -532,11 +931,9 @@ export default function Customer() {
         )}
       </Container>
 
-      <Box sx={{ textAlign: "center", py: 4, color: "rgba(248,250,252,0.6)" }}>
-        <Typography variant="body2">© 2025 BITSmart — Crafted for immersive commerce.</Typography>
-      </Box>
+      
 
-      <Dialog open={dialogOpen} onClose={handleCloseDialog} fullWidth maxWidth="sm">
+      {/* <Dialog open={dialogOpen} onClose={handleCloseDialog} fullWidth maxWidth="sm">
         <DialogTitle sx={{ pr: 6 }}>
           Choose a boutique for {dialogCategory}
           <IconButton
@@ -594,12 +991,12 @@ export default function Customer() {
           <Button
             variant="contained"
             onClick={handleAddToCart}
-            disabled={!activeRetailer}
+            //disabled={!activeRetailer}
           >
             Add to cart
           </Button>
         </DialogActions>
-      </Dialog>
+      </Dialog> */}
     </Box>
   );
 }
