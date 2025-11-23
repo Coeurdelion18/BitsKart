@@ -152,10 +152,13 @@ export default function Wholesaler() {
     if (!uid) return;
     const stockSnap = await getDoc(doc(db, "stocks", uid));
     const stockData = stockSnap.exists() ? stockSnap.data() : {};
+
+    // Filter out timestamp fields
+    const { updatedAt, createdAt, ...cleanStockData } = stockData;
     
     // Initialize both stock and formStock with the same data
-    setStock(stockData);
-    setFormStock({...stockData});
+    setStock(cleanStockData);
+    setFormStock({...cleanStockData});
     
     // Load saved prices and images if they exist
     const savedPrices = stockData.prices || {};
@@ -190,20 +193,28 @@ export default function Wholesaler() {
   useEffect(() => {
     if (!wholesalerId) return;
 
-    const ordersRef = collection(db, "orders");
+    const ordersRef = collection(db, "retailerOrders");
     const q = query(ordersRef, orderBy("createdAt", "desc"));
     
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      for (const change of snapshot.docChanges()) {
         if (change.type === "added") {
           const order = { id: change.doc.id, ...change.doc.data() };
           
-          // Only process orders from retailers (not the wholesaler's own orders)
-          if (order.wholesalerId === wholesalerId && order.userId !== wholesalerId) {
-            updateInventoryForOrder(order);
+          if (
+            order.wholesalerId === wholesalerId &&
+            order.userId !== wholesalerId &&
+            order.status === "Placed" &&
+            !order.stockUpdated // Add this check
+          ) {
+            await updateInventoryForOrder(order);
+            // Mark the order as processed
+            await updateDoc(doc(db, "retailerOrders", order.id), {
+              stockUpdated: true
+            });
           }
         }
-      });
+      }
     });
 
     return () => unsubscribe();
@@ -422,7 +433,7 @@ export default function Wholesaler() {
   // --- Orders ---
   const fetchOrders = async (uid) => {
     if (!uid) return;
-    const q = query(collection(db, "orders"), orderBy("createdAt", "desc"));
+    const q = query(collection(db, "retailerOrders"), orderBy("createdAt", "desc"));
     const snapshot = await getDocs(q);
     const allOrders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     const myOrders = allOrders.filter((o) => o.wholesalerId === uid);
@@ -631,7 +642,7 @@ export default function Wholesaler() {
                     <TableRow key={cat}>
                       <TableCell>{cat}</TableCell>
                       <TableCell>{productNames[cat] || 'Not specified'}</TableCell>
-                      <TableCell>{typeof stock[cat] === 'number' ? stock[cat] : 0}</TableCell>
+                      <TableCell>{stock[cat]||0}</TableCell>
                       <TableCell>₹{(prices[cat] || 0).toFixed(2)}</TableCell>
                     </TableRow>
                   ))

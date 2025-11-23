@@ -98,7 +98,8 @@ const MapComponent = ({ location, setLocation }) => {
 const buildWholesalerStockView = (stockData = {}, wholesalerData = {}) => {
   const cleanStock = {};
   Object.entries(stockData).forEach(([key, value]) => {
-    if (typeof value === "number") {
+    // Exclude timestamp fields and only include numeric values
+    if (typeof value === "number" && !['updatedAt', 'createdAt'].includes(key)) {
       cleanStock[key] = value;
     }
   });
